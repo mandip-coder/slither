@@ -642,6 +642,19 @@ export default function GamePage() {
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.code === 'Space') handleBoost(true);
+      if (e.key === 'Escape') {
+        // Stop Game, Return to Menu, Reconnect to Lobby
+        if (socketRef.current) {
+          socketRef.current.disconnect();
+          setIsConnected(false);
+        }
+        setIsPlaying(false);
+        setPlayerName('');
+        localSnakeRef.current = null;
+
+        // Reconnect to Lobby
+        setTimeout(connectToLobby, 100);
+      }
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
@@ -1002,9 +1015,15 @@ export default function GamePage() {
   };
 
 
-  // Render Red Collision Border
+  // Render Red Collision Border (Circular)
   const renderBorder = (ctx: CanvasRenderingContext2D, worldWidth: number, worldHeight: number) => {
     ctx.save();
+
+    const centerX = worldWidth / 2;
+    const centerY = worldHeight / 2;
+    // Assuming Map Radius is half of World Width (minus margin ideally, but usually exact)
+    // Server config uses 2500 for 5000 width.
+    const mapRadius = worldWidth / 2;
 
     // Glow effect
     ctx.shadowColor = '#ff0000';
@@ -1013,16 +1032,14 @@ export default function GamePage() {
     ctx.lineWidth = 5;
 
     ctx.beginPath();
-    // Draw rectangle for the world border
-    // 0,0 is top left
-    ctx.rect(0, 0, worldWidth, worldHeight);
+    ctx.arc(centerX, centerY, mapRadius, 0, Math.PI * 2);
     ctx.stroke();
 
     // Add a second inner line for "hazard" look
     ctx.lineWidth = 2;
     ctx.strokeStyle = '#ff3333';
     ctx.beginPath();
-    ctx.rect(10, 10, worldWidth - 20, worldHeight - 20);
+    ctx.arc(centerX, centerY, mapRadius - 20, 0, Math.PI * 2);
     ctx.stroke();
 
     ctx.restore();
@@ -1534,24 +1551,15 @@ export default function GamePage() {
   const joinGame = () => {
     if (!playerName.trim()) return;
 
-    // Force FULL socket reconnection logic
     if (socketRef.current) {
-      if (socketRef.current.connected) {
-        // Already connected? Disconnect first if we are respawning to ensure fresh state
-        // Or if this is first join, just use it.
-        // But requirement is "old socket must be fully disconnected".
-        // So if we are "dead", we should have already disconnected?
-        // Let's ensure we get a NEW socket.
-        socketRef.current.disconnect();
-      }
-      // Force replace socket ref
+      socketRef.current.disconnect();
       socketRef.current = null;
     }
 
     setIsConnecting(true); // UI State
 
     // Create NEW socket connection
-    const newSocket = io('http://localhost:3000', {
+    const newSocket = io({
       transports: ['websocket'],
       forceNew: true, // Explicitly force new connection
       reconnection: false // Manual control
@@ -1570,13 +1578,24 @@ export default function GamePage() {
       });
     });
 
-    // ... (rest of socket event handlers need to be re-attached here because socket instance changed!) ...
-    // This implies we need to restructure the useEffect!
-    // We cannot just use the old `useEffect` anymore if we are manually creating sockets outside it.
-
-    // CHANGE OF PLAN: We will use a `connectGame` function that sets up EVERYTHING.
-    // We will disable the initial useEffect socket creation.
     setupSocket(newSocket);
+  };
+
+  // Connect to Lobby (Spectate/Idle state)
+  const connectToLobby = () => {
+    if (socketRef.current && socketRef.current.connected) return;
+
+    const socket = io({ transports: ['websocket'] });
+
+    socket.on('connect', () => {
+      setIsConnected(true);
+    });
+
+    socket.on('disconnect', () => {
+      setIsConnected(false);
+    });
+
+    setupSocket(socket);
   };
 
   // State
@@ -1650,32 +1669,15 @@ export default function GamePage() {
     });
   };
 
-  // Initialize Socket.IO connection - REMOVE AUTOMATIC CONNECTION
-  // We wait for user action.
-  // We wait for user action.
+  // Initialize Socket.IO connection
   useEffect(() => {
-    // Optional: Connect purely for spectator mode?
-    // For now, let's keep it disconnected until play to satisfy "fresh socket" requirement strictly.
-    // Or, connect once for "Lobby" status, then Re-connect on Play.
-    // The requirement is "When a player gets eliminated... new socket... re-entry".
-
-    // Let's auto-connect to LOBBY (spectate) first?
-    // "The entry screen... looks very poor". If we don't connect, we can't show "Connected to server".
-    // Let's connect initially.
-    const socket = io('http://localhost:3000', { transports: ['websocket'] });
-
-    socket.on('connect', () => {
-      setIsConnected(true);
-    });
-
-    setupSocket(socket);
-
+    connectToLobby();
     return () => {
-      socket.disconnect();
+      if (socketRef.current) socketRef.current.disconnect();
     };
-  }, []); // Run once on mount
+  }, []);
 
-  // Watch for death to trigger disconnect
+  // Watch for death to trigger disconnect/reconnect to lobby
   useEffect(() => {
     if (!isPlaying || isDead) return;
 
@@ -1688,11 +1690,12 @@ export default function GamePage() {
           setIsPlaying(false);
           localSnakeRef.current = null;
 
-          // DETECTED DEATH -> DISCONNECT SOCKET IMMEDIATELY
+          // DETECTED DEATH -> Reconnect to Lobby
           if (socketRef.current) {
-            console.log('Player died. Disconnecting socket.');
+            console.log('Player died. Reconnecting to lobby.');
             socketRef.current.disconnect();
-            setIsConnected(false); // Update UI to show disconnected
+            setIsConnected(false); // Briefly offline
+            setTimeout(connectToLobby, 100); // Reconnect
           }
         }
       }

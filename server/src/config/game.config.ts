@@ -6,9 +6,10 @@ export const GAME_CONFIG = {
   // World settings
   WORLD_WIDTH: 5000,
   WORLD_HEIGHT: 5000,
+  MAP_RADIUS: 2500,
 
   // Snake settings
-  INITIAL_SNAKE_LENGTH: 10,
+  INITIAL_SNAKE_LENGTH: 50,
   SNAKE_SPEED: 150, // pixels per second
   SEGMENT_RADIUS: 8, // radius of each snake segment
   SEGMENT_SPACING: 15, // distance between segments

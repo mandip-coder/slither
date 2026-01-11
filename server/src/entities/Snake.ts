@@ -22,7 +22,7 @@ export class Snake {
 
   // PATH-BASED MOVEMENT (CORE)
   private path: Point[] = [];
-  private readonly segmentDistance = 12; // Fixed distance between body segments
+  private readonly segmentDistance = GAME_CONFIG.SEGMENT_SPACING; // Fixed distance between body segments
   private readonly maxLength = 500;
   private segmentsDirty: boolean = true;
   private cachedSegments: Array<Point & { radius: number }> = [];

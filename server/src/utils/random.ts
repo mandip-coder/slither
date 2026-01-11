@@ -18,9 +18,14 @@ export function randomFloat(min: number, max: number): number {
  * Generate random position within world bounds
  */
 export function randomPosition(worldSize: WorldSize, margin: number = 100): Point {
+  const radius = (worldSize.width / 2) - margin;
+  const angle = Math.random() * Math.PI * 2;
+  // Use sqrt for uniform distribution in circle
+  const r = radius * Math.sqrt(Math.random());
+
   return {
-    x: randomFloat(margin, worldSize.width - margin),
-    y: randomFloat(margin, worldSize.height - margin)
+    x: worldSize.width / 2 + r * Math.cos(angle),
+    y: worldSize.height / 2 + r * Math.sin(angle)
   };
 }
 

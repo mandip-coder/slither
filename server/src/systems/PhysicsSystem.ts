@@ -31,11 +31,17 @@ export class PhysicsSystem implements ISystem {
    */
   private handleWorldBoundaries(snake: any, worldWidth: number, worldHeight: number): void {
     const head = snake.head;
-    const margin = 0; // Strict boundary
+    const centerX = worldWidth / 2;
+    const centerY = worldHeight / 2;
+    const radius = GAME_CONFIG.MAP_RADIUS;
 
-    // Check boundaries
-    if (head.x < margin || head.x > worldWidth - margin ||
-      head.y < margin || head.y > worldHeight - margin) {
+    // Check distance from center
+    const dx = head.x - centerX;
+    const dy = head.y - centerY;
+    const distSq = dx * dx + dy * dy;
+
+    // Die if outside circle
+    if (distSq > radius * radius) {
       snake.die();
     }
   }
