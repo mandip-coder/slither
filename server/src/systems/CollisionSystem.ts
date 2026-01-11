@@ -91,8 +91,8 @@ export class CollisionSystem implements ISystem {
       for (const foodItem of food.values()) {
         if (foodItem.isConsumed) continue;
 
-        // Check head collision with forgiving radius (1.5x)
-        const grabRadius = head.radius + foodItem.radius * 2;
+        // Check head collision with forgiving radius
+        const grabRadius = head.radius + foodItem.radius * 1.0; // Tighter radius (was * 2.0)
         let eaten = pointInCircle(foodItem.position, head, grabRadius);
 
         // Anti-tunneling: Check collision with the last path segment as well

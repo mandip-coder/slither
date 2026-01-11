@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { InterpolationManager } from './utils/InterpolationManager';
+import EntryScreen from './components/EntryScreen';
 
 // Types
 interface Point {
@@ -65,11 +66,15 @@ interface InputCommand {
 }
 
 const SKINS = [
-  { id: 'default', name: 'Original', color: '#4ade80' },
-  { id: 'fire', name: 'Fire', color: '#ef4444' },
-  { id: 'ice', name: 'Ice', color: '#3b82f6' },
-  { id: 'gold', name: 'Gold', color: '#eab308' },
-  { id: 'ghost', name: 'Ghost', color: '#a1a1aa' }
+  { id: 'neon-green', name: 'Neon Green', color: '#33ff00' },
+  { id: 'neon-cyan', name: 'Neon Cyan', color: '#00ffcc' },
+  { id: 'neon-purple', name: 'Neon Purple', color: '#cc00ff' },
+  { id: 'neon-pink', name: 'Neon Pink', color: '#ff00cc' },
+  { id: 'neon-red', name: 'Neon Red', color: '#ff0055' },
+  { id: 'fire', name: 'Fire', color: '#ff4500' },
+  { id: 'ice', name: 'Ice', color: '#00bfff' },
+  { id: 'gold', name: 'Gold', color: '#ffd700' },
+  { id: 'dark', name: 'Shadow', color: '#404040' }
 ];
 
 // --- VISUAL HELPERS (Two-Pass Segmented Rendering) ---
@@ -250,7 +255,7 @@ export default function GamePage() {
   const [isConnected, setIsConnected] = useState(false);
   const [playerName, setPlayerName] = useState('');
   const [isPlaying, setIsPlaying] = useState(false);
-  const [selectedSkin, setSelectedSkin] = useState('default');
+  const [selectedSkin, setSelectedSkin] = useState('neon-green');
 
   /**
    * Render Snake V2: The "Slither Style" Two-Pass System
@@ -1527,159 +1532,213 @@ export default function GamePage() {
 
   // Join game
   const joinGame = () => {
-    if (!socketRef.current || !playerName.trim()) return;
+    if (!playerName.trim()) return;
 
-    setIsDead(false); // Reset death state
-    socketRef.current.emit('join-room', {
-      playerName: playerName.trim(),
-      roomId: 'main',
-      skinId: selectedSkin
+    // Force FULL socket reconnection logic
+    if (socketRef.current) {
+      if (socketRef.current.connected) {
+        // Already connected? Disconnect first if we are respawning to ensure fresh state
+        // Or if this is first join, just use it.
+        // But requirement is "old socket must be fully disconnected".
+        // So if we are "dead", we should have already disconnected?
+        // Let's ensure we get a NEW socket.
+        socketRef.current.disconnect();
+      }
+      // Force replace socket ref
+      socketRef.current = null;
+    }
+
+    setIsConnecting(true); // UI State
+
+    // Create NEW socket connection
+    const newSocket = io('http://localhost:3000', {
+      transports: ['websocket'],
+      forceNew: true, // Explicitly force new connection
+      reconnection: false // Manual control
+    });
+
+    newSocket.on('connect', () => {
+      console.log('Connected with NEW socket ID:', newSocket.id);
+      setIsConnected(true);
+      setIsConnecting(false);
+
+      // Immediately join room after connecting
+      newSocket.emit('join-room', {
+        playerName: playerName.trim(),
+        roomId: 'main',
+        skinId: selectedSkin
+      });
+    });
+
+    // ... (rest of socket event handlers need to be re-attached here because socket instance changed!) ...
+    // This implies we need to restructure the useEffect!
+    // We cannot just use the old `useEffect` anymore if we are manually creating sockets outside it.
+
+    // CHANGE OF PLAN: We will use a `connectGame` function that sets up EVERYTHING.
+    // We will disable the initial useEffect socket creation.
+    setupSocket(newSocket);
+  };
+
+  // State
+  const [isDead, setIsDead] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  // Setup Socket Listeners Helper
+  const setupSocket = (socket: Socket) => {
+    socketRef.current = socket;
+
+    socket.on('disconnect', () => {
+      console.log('Disconnected');
+      setIsConnected(false);
+      setIsPlaying(false);
+    });
+
+    socket.on('game-state', (state: GameState) => {
+      gameStateRef.current = state;
+      // ... (rest of interpolation logic, mostly same)
+      const playerSnake = state.snakes.find(s => s.playerId === playerIdRef.current);
+      if (playerSnake) {
+        if (!localSnakeRef.current) {
+          localSnakeRef.current = {
+            head: { ...playerSnake.head },
+            direction: playerSnake.direction,
+            targetDirection: playerSnake.direction,
+            lastServerSync: Date.now(),
+            path: playerSnake.path ? [...playerSnake.path].reverse() : [{ ...playerSnake.head }],
+            pendingPathLength: playerSnake.length,
+            currentVisualLength: playerSnake.length
+          };
+        } else {
+          const dist = Math.hypot(
+            localSnakeRef.current.head.x - playerSnake.head.x,
+            localSnakeRef.current.head.y - playerSnake.head.y
+          );
+          if (dist > 100) {
+            localSnakeRef.current.head = { ...playerSnake.head };
+            localSnakeRef.current.direction = playerSnake.direction;
+            localSnakeRef.current.path = playerSnake.path ? [...playerSnake.path].reverse() : [{ ...playerSnake.head }];
+          } else if (dist > 20) {
+            localSnakeRef.current.head.x += (playerSnake.head.x - localSnakeRef.current.head.x) * 0.1;
+            localSnakeRef.current.head.y += (playerSnake.head.y - localSnakeRef.current.head.y) * 0.1;
+          }
+          localSnakeRef.current.pendingPathLength = playerSnake.length;
+        }
+      }
+
+      const timestamp = Date.now();
+      for (const snake of state.snakes) {
+        if (snake.playerId !== playerIdRef.current) {
+          interpolationRef.current.addSnapshot(snake.id, {
+            tick: state.tick,
+            timestamp,
+            head: { ...snake.head },
+            direction: snake.direction,
+            length: snake.length
+          });
+        }
+      }
+    });
+
+    socket.on('delta-update', (delta: any) => {
+      applyDelta(delta);
+    });
+
+    socket.on('player-spawned', (data: { playerId: string; snakeId: string }) => {
+      playerIdRef.current = data.playerId;
+      setIsPlaying(true);
+      setIsDead(false);
     });
   };
 
-  const [isDead, setIsDead] = useState(false);
+  // Initialize Socket.IO connection - REMOVE AUTOMATIC CONNECTION
+  // We wait for user action.
+  // We wait for user action.
+  useEffect(() => {
+    // Optional: Connect purely for spectator mode?
+    // For now, let's keep it disconnected until play to satisfy "fresh socket" requirement strictly.
+    // Or, connect once for "Lobby" status, then Re-connect on Play.
+    // The requirement is "When a player gets eliminated... new socket... re-entry".
 
-  // Check for death (snake missing from state while playing)
+    // Let's auto-connect to LOBBY (spectate) first?
+    // "The entry screen... looks very poor". If we don't connect, we can't show "Connected to server".
+    // Let's connect initially.
+    const socket = io('http://localhost:3000', { transports: ['websocket'] });
+
+    socket.on('connect', () => {
+      setIsConnected(true);
+    });
+
+    setupSocket(socket);
+
+    return () => {
+      socket.disconnect();
+    };
+  }, []); // Run once on mount
+
+  // Watch for death to trigger disconnect
   useEffect(() => {
     if (!isPlaying || isDead) return;
 
     const checkDeath = () => {
       const state = gameStateRef.current;
-      // We must have received at least one tick to start checking
       if (state.tick > 0) {
         const playerSnake = state.snakes.find(s => s.playerId === playerIdRef.current);
         if (!playerSnake) {
           setIsDead(true);
           setIsPlaying(false);
-          localSnakeRef.current = null; // Clear local prediction
+          localSnakeRef.current = null;
+
+          // DETECTED DEATH -> DISCONNECT SOCKET IMMEDIATELY
+          if (socketRef.current) {
+            console.log('Player died. Disconnecting socket.');
+            socketRef.current.disconnect();
+            setIsConnected(false); // Update UI to show disconnected
+          }
         }
       }
     };
 
-    const interval = setInterval(checkDeath, 1000); // Check every second
+    const interval = setInterval(checkDeath, 1000);
     return () => clearInterval(interval);
   }, [isPlaying, isDead]);
 
   // Also check immediately on state updates if possible, but interval is safer against race conditions
 
   return (
-    <div className="relative w-full h-screen bg-black overflow-hidden">
+    <div className="relative w-full h-screen bg-black overflow-hidden font-sans">
       <canvas
         ref={canvasRef}
         className="absolute inset-0 cursor-crosshair"
       />
 
-      {/* Join / Game Over screen */}
+      {/* Entry Screen Overlay */}
       {(!isPlaying || isDead) && (
-        <div className="absolute inset-0 flex items-center justify-center z-10">
-          {/* Animated background */}
-          <div className="absolute inset-0 bg-gradient-to-br from-green-900/20 via-black to-blue-900/20"></div>
+        <EntryScreen
+          playerName={playerName}
+          setPlayerName={setPlayerName}
+          selectedSkin={selectedSkin}
+          setSelectedSkin={setSelectedSkin}
+          onJoin={joinGame}
+          isConnecting={isConnecting}
+          isConnected={isConnected}
+          isDead={isDead}
+          skins={SKINS}
+        />
+      )}
 
-          <div className="relative bg-gradient-to-br from-zinc-900 to-zinc-800 p-10 rounded-2xl shadow-2xl max-w-md w-full border-2 border-green-500/30">
-            {/* Title */}
-            <div className="text-center mb-8">
-              <h1 className="text-6xl font-bold bg-gradient-to-r from-green-400 to-blue-500 bg-clip-text text-transparent mb-2">
-                Slither.io
-              </h1>
-              {isDead ? (
-                <p className="text-red-500 font-bold text-xl animate-pulse">YOU DIED!</p>
-              ) : (
-                <p className="text-zinc-400 text-sm">Eat. Grow. Survive.</p>
-              )}
-            </div>
-
-            <div className="space-y-4">
-              {/* Name input */}
-              <div>
-                <label className="block text-zinc-300 text-sm font-medium mb-2">
-                  Enter your name
-                </label>
-                <input
-                  type="text"
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && joinGame()}
-                  placeholder="Player name..."
-                  className="w-full px-4 py-3 bg-zinc-800/50 text-white rounded-lg border-2 border-zinc-700 focus:outline-none focus:border-green-500 transition-colors placeholder-zinc-500"
-                  maxLength={20}
-                  autoFocus
-                />
-              </div>
-
-              {/* Play button */}
-              <button
-                onClick={joinGame}
-                disabled={!isConnected || !playerName.trim()}
-                className={`w-full px-6 py-4 text-white font-bold text-lg rounded-lg transition-all transform hover:scale-105 disabled:scale-100 shadow-lg ${isDead
-                  ? 'bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400'
-                  : 'bg-gradient-to-r from-green-600 to-green-500 hover:from-green-500 hover:to-green-400'
-                  } disabled:from-gray-700 disabled:to-gray-600 disabled:cursor-not-allowed`}
-              >
-                {isConnected ? (isDead ? '💀 Respawn' : '🎮 Play Now') : '⏳ Connecting...'}
-              </button>
-            </div>
-
-            {/* Skin Selector */}
-            <div>
-              <label className="block text-zinc-300 text-sm font-medium mb-2">
-                Select Skin
-              </label>
-              <div className="grid grid-cols-5 gap-2">
-                {SKINS.map((skin) => (
-                  <button
-                    key={skin.id}
-                    onClick={() => setSelectedSkin(skin.id)}
-                    className={`w-full aspect-square rounded-full border-2 transition-all transform hover:scale-110 ${selectedSkin === skin.id
-                      ? 'border-white scale-110 shadow-[0_0_10px_rgba(255,255,255,0.5)]'
-                      : 'border-transparent opacity-70 hover:opacity-100'
-                      }`}
-                    style={{ backgroundColor: skin.color }}
-                    title={skin.name}
-                  />
-                ))}
-              </div>
-            </div>
-
-            {/* Connection status */}
-            <div className="text-center text-sm">
-              {isConnected ? (
-                <span className="text-green-400 flex items-center justify-center gap-2">
-                  <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
-                  Connected to server
-                </span>
-              ) : (
-                <span className="text-red-400 flex items-center justify-center gap-2">
-                  <span className="w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
-                  Connecting to server...
-                </span>
-              )}
-            </div>
-
-            {/* Instructions */}
-            <div className="mt-6 p-4 bg-zinc-800/30 rounded-lg border border-zinc-700/50">
-              <h3 className="text-white font-semibold mb-2 text-sm">How to Play:</h3>
-              <ul className="text-zinc-400 text-xs space-y-1">
-                <li>• Move your mouse to control the snake</li>
-                <li>• Eat green food to grow longer</li>
-                <li>• Avoid hitting other snakes</li>
-                <li>• Trap others to make them crash!</li>
-              </ul>
-            </div>
+      {/* Instructions Overlay (Minimally intrusive) */}
+      {isPlaying && !isDead && (
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 flex gap-4 pointer-events-none">
+          <div className="glass-panel px-4 py-1.5 rounded-full text-white/70 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full border border-white/30 flex items-center justify-center text-[8px] bg-white/5">M</span>
+            Move
+          </div>
+          <div className="glass-panel px-4 py-1.5 rounded-full text-white/70 text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+            <span className="w-4 h-4 rounded-full border border-white/30 flex items-center justify-center text-[8px] bg-white/5">SP</span>
+            Boost
           </div>
         </div>
-      )
-      }
-
-      {/* Instructions Overlay (Only when playing) */}
-      {
-        isPlaying && !isDead && (
-          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 bg-black/70 px-6 py-3 rounded-lg pointer-events-none">
-            <p className="text-white text-sm">
-              Move your mouse to control the snake
-            </p>
-          </div>
-        )
-      }
-    </div >
+      )}
+    </div>
   );
 }

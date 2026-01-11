@@ -23,9 +23,9 @@ export const GAME_CONFIG = {
   FOOD_COUNT: 1500, // Reduced from 5000 for performance
   FOOD_VALUE: 1,
   FOOD_RADIUS: 5,
-  FOOD_MIN_SIZE: 4,
-  FOOD_MAX_SIZE: 10,
-  MAGNET_RADIUS: 100, // Distance for magnet effect
+  FOOD_MIN_SIZE: 3,
+  FOOD_MAX_SIZE: 8,
+  MAGNET_RADIUS: 50, // Reduced from 100 for more realistic feel
   FOOD_COLORS: [
     '#ff0055', // Neon Red
     '#ff9900', // Neon Orange

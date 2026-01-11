@@ -89,8 +89,13 @@ export class ConnectionManager {
 
       // Spawn snake for player
       const { SKINS } = require('../config/game.config');
-      const randomSkin = SKINS[Math.floor(Math.random() * SKINS.length)].id;
-      this.spawnSnake(socket, player, gameState, randomSkin);
+
+      // Use requested skin if valid, otherwise fallback to default
+      const requestedSkin = data.skinId && SKINS.find((s: any) => s.id === data.skinId)
+        ? data.skinId
+        : SKINS[0].id;
+
+      this.spawnSnake(socket, player, gameState, requestedSkin);
 
       // Join socket room
       socket.join(roomId);
