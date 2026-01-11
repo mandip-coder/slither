@@ -31,10 +31,10 @@ interface InterpolatedSnake {
 
 export class InterpolationManager {
   private snakes: Map<string, InterpolatedSnake> = new Map();
-  private readonly bufferSize = 3; // Keep last 3 snapshots
-  private readonly renderDelay = 100; // 100ms behind server (2 updates @ 20Hz)
+  private readonly bufferSize = 5; // Keep last 5 snapshots (more safety for high freq)
+  private readonly renderDelay = 75; // reduced to 75ms (approx 4.5 frames at 60Hz) for low latency
   private readonly maxSnapAge = 500; // Discard snapshots older than 500ms
-  private readonly snapThreshold = 200; // Snap if >200 pixels away
+  private readonly snapThreshold = 100; // Tighter snap threshold for faster correction
 
   /**
    * Add a new snapshot from server
@@ -55,6 +55,11 @@ export class InterpolationManager {
         name: snapshot.name
       };
       this.snakes.set(snakeId, snake);
+    }
+
+    // Update static data if available
+    if (snapshot.name) {
+      snake.name = snapshot.name;
     }
 
     // Add snapshot to buffer
@@ -134,8 +139,8 @@ export class InterpolationManager {
       // Interpolate direction (shortest path)
       snake.currentDirection = this.lerpAngle(before.direction, after.direction, smoothT);
 
-      // Interpolate length (instant for now, could smooth)
-      snake.currentLength = after.length;
+      // Interpolate length (linear)
+      snake.currentLength = this.lerp(before.length, after.length, smoothT);
     }
 
     // UPDATE PATH HISTORY

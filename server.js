@@ -26,7 +26,7 @@ app.prepare().then(() => {
   // Initialize Socket.IO
   const io = new Server(httpServer, {
     cors: {
-      origin: dev ? 'http://localhost:3000' : '*',
+      origin: '*',
       methods: ['GET', 'POST']
     }
   });

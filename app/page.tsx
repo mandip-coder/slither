@@ -356,13 +356,13 @@ export default function GamePage() {
       ctx.shadowBlur = 4;
       ctx.shadowColor = 'black';
       // Position text above head
-      ctx.fillText(isPlayer ? 'YOU' : 'Enemy', drawHeadPos.x, drawHeadPos.y - (baseRadius + 15));
+      ctx.fillText(isPlayer ? 'YOU' : (snake.name || 'Enemy'), drawHeadPos.x, drawHeadPos.y - (baseRadius + 15));
     }
   }
 
   // Initialize Socket.IO connection
   useEffect(() => {
-    const socket = io('http://localhost:3000', {
+    const socket = io({
       transports: ['websocket']
     });
 
