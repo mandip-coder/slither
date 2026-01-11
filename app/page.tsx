@@ -14,6 +14,7 @@ interface Point {
 interface Snake {
   id: string;
   playerId: string;
+  name?: string; // Player name
   head: Point;
   direction: number;
   length: number;
@@ -913,7 +914,9 @@ export default function GamePage() {
               ...snake,
               head: interpolated.currentHead,
               direction: interpolated.currentDirection,
-              length: interpolated.currentLength
+              length: interpolated.currentLength,
+              path: interpolated.path,
+              name: interpolated.name
             };
 
             // Use server path as-is (server sends complete path)
@@ -1268,7 +1271,7 @@ export default function GamePage() {
       ctx.textAlign = 'center';
       ctx.shadowBlur = 4;
       ctx.shadowColor = 'black';
-      ctx.fillText(isPlayer ? 'YOU' : 'Enemy', drawHeadPos.x, drawHeadPos.y - 30);
+      ctx.fillText(isPlayer ? 'YOU' : (snake.name || 'Enemy'), drawHeadPos.x, drawHeadPos.y - 30);
     }
   };
 
@@ -1652,7 +1655,10 @@ export default function GamePage() {
             timestamp,
             head: { ...snake.head },
             direction: snake.direction,
-            length: snake.length
+            length: snake.length,
+            path: snake.path,
+            name: snake.name
+
           });
         }
       }

@@ -14,6 +14,8 @@ interface SnakeSnapshot {
   head: Point;
   direction: number;
   length: number;
+  path?: Point[]; // Add path
+  name?: string;
 }
 
 interface InterpolatedSnake {
@@ -23,6 +25,8 @@ interface InterpolatedSnake {
   currentDirection: number;
   currentLength: number;
   renderDelay: number; // ms behind server
+  path: Point[]; // Add path
+  name?: string;
 }
 
 export class InterpolationManager {
@@ -46,7 +50,9 @@ export class InterpolationManager {
         currentHead: { ...snapshot.head },
         currentDirection: snapshot.direction,
         currentLength: snapshot.length,
-        renderDelay: this.renderDelay
+        renderDelay: this.renderDelay,
+        path: snapshot.path ? [...snapshot.path] : [],
+        name: snapshot.name
       };
       this.snakes.set(snakeId, snake);
     }
@@ -80,6 +86,7 @@ export class InterpolationManager {
    */
   private interpolateSnake(snake: InterpolatedSnake, currentTime: number): void {
     const renderTime = currentTime - snake.renderDelay;
+    const prevHead = { ...snake.currentHead };
 
     // Find two snapshots to interpolate between
     let before: SnakeSnapshot | null = null;
@@ -108,27 +115,66 @@ export class InterpolationManager {
           snake.currentHead = { ...latest.head };
           snake.currentDirection = latest.direction;
           snake.currentLength = latest.length;
+          // Reset path on snap
+          if (latest.path) snake.path = [...latest.path];
         } else {
           // Extrapolate (predict forward)
           this.extrapolate(snake, latest, currentTime);
         }
       }
-      return;
+    } else {
+      // Interpolate between snapshots
+      const t = (renderTime - before.timestamp) / (after.timestamp - before.timestamp);
+      const smoothT = this.smoothstep(t); // Smooth interpolation
+
+      // Interpolate position
+      snake.currentHead.x = this.lerp(before.head.x, after.head.x, smoothT);
+      snake.currentHead.y = this.lerp(before.head.y, after.head.y, smoothT);
+
+      // Interpolate direction (shortest path)
+      snake.currentDirection = this.lerpAngle(before.direction, after.direction, smoothT);
+
+      // Interpolate length (instant for now, could smooth)
+      snake.currentLength = after.length;
     }
 
-    // Interpolate between snapshots
-    const t = (renderTime - before.timestamp) / (after.timestamp - before.timestamp);
-    const smoothT = this.smoothstep(t); // Smooth interpolation
+    // UPDATE PATH HISTORY
+    // Only add point if moved enough
+    const moveDist = this.distance(prevHead, snake.currentHead);
+    if (moveDist > 2) { // Match server resolution (approx)
+      snake.path.push({ ...snake.currentHead });
+      this.maintainPathLength(snake);
+    }
+  }
 
-    // Interpolate position
-    snake.currentHead.x = this.lerp(before.head.x, after.head.x, smoothT);
-    snake.currentHead.y = this.lerp(before.head.y, after.head.y, smoothT);
+  /**
+   * Maintain path length based on snake length
+   */
+  private maintainPathLength(snake: InterpolatedSnake): void {
+    // Simple safety limit first
+    if (snake.path.length > 2000) {
+      snake.path.shift();
+    }
 
-    // Interpolate direction (shortest path)
-    snake.currentDirection = this.lerpAngle(before.direction, after.direction, smoothT);
+    // Distance-based trimming (Smooth tail)
+    // Calculate total path length
+    let totalDist = 0;
+    const spacing = 5; // Default spacing
+    const maxPathLen = snake.currentLength * spacing;
 
-    // Interpolate length (instant for now, could smooth)
-    snake.currentLength = after.length;
+    // We iterate from HEAD (end) backwards
+    let trimIndex = 0;
+    for (let i = snake.path.length - 1; i > 0; i--) {
+      totalDist += this.distance(snake.path[i], snake.path[i - 1]);
+      if (totalDist > maxPathLen) {
+        trimIndex = i;
+        break;
+      }
+    }
+
+    if (trimIndex > 0) {
+      snake.path = snake.path.slice(trimIndex);
+    }
   }
 
   /**

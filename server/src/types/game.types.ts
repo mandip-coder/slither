@@ -25,6 +25,7 @@ export interface SerializedSnake {
   score: number;
   path?: Point[]; // Path for client-side rendering
   isBoosting?: boolean; // Visual state for boost effects
+  name?: string; // Player name
 }
 
 export interface SerializedFood {

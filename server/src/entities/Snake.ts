@@ -6,6 +6,7 @@ export class Snake {
   // ============================================
   public id: string;
   public playerId: string;
+  public name: string;
   public head: Point;
   public direction: number;
   public targetDirection: number;
@@ -30,6 +31,7 @@ export class Snake {
   constructor(
     id: string,
     playerId: string,
+    name: string,
     position: Point,
     direction: number,
     color: string,
@@ -37,6 +39,7 @@ export class Snake {
   ) {
     this.id = id;
     this.playerId = playerId;
+    this.name = name;
     this.head = { ...position };
     this.direction = direction;
     this.targetDirection = direction;
@@ -297,7 +300,8 @@ export class Snake {
       score: Math.floor(this.length * 10), // Ensure integer score
       // Send FULL path (trimmed by trimPathByDistance) so client can render full length
       // Previously limited to 50, which broke rendering for long snakes
-      path: this.path
+      path: this.path,
+      name: this.name
     };
   }
 

@@ -146,7 +146,7 @@ export class ConnectionManager {
     const color = skin.color;
 
     // Create snake with Skin ID
-    const snake = new Snake(snakeId, player.id, position, direction, color, skinId);
+    const snake = new Snake(snakeId, player.id, player.name, position, direction, color, skinId);
     gameState.addSnake(snake);
 
     logger.gameEvent('Snake spawned', {
