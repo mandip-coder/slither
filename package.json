@@ -1,0 +1,30 @@
+{
+  "name": "slither",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "npm run build:server && node server.js",
+    "build": "next build",
+    "build:server": "cd server && tsc",
+    "start": "cross-env NODE_ENV=production node server.js",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "next": "16.1.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "socket.io": "^4.7.5",
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
