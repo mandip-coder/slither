@@ -779,14 +779,15 @@ export default function GamePage() {
 
             // Smooth Length Interpolation
             // pendingPathLength comes from server. currentVisualLength is what we render.
-            // Grow speed: 20 units per second, or proportional
+            // Improved: Use exponential smoothing (ease-out) for natural growth.
+            // Factor 2.0 = smooth and leisurely. 5.0 = snappy.
             const lengthDiff = localSnakeRef.current.pendingPathLength - localSnakeRef.current.currentVisualLength;
-            if (lengthDiff > 0) {
-              // Grow
-              localSnakeRef.current.currentVisualLength += Math.min(lengthDiff, 20 * dt);
-            } else if (lengthDiff < 0) {
-              // Shrink (e.g. if hit something, though collision usually kills)
-              localSnakeRef.current.currentVisualLength += Math.max(lengthDiff, -20 * dt);
+
+            if (Math.abs(lengthDiff) > 0.1) {
+              const interpolationFactor = 3.0; // Adjustable sweetness
+              localSnakeRef.current.currentVisualLength += lengthDiff * interpolationFactor * dt;
+            } else {
+              localSnakeRef.current.currentVisualLength = localSnakeRef.current.pendingPathLength;
             }
 
             // Trim tail to match SMOOTH visual length
