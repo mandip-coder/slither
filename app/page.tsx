@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { InterpolationManager } from './utils/InterpolationManager';
+import { ParticleSystem } from './utils/ParticleSystem';
 import EntryScreen from './components/EntryScreen';
 
 // Types
@@ -56,6 +57,7 @@ interface LocalSnakeState {
   path: Point[]; // Local high-res history for smooth rendering
   pendingPathLength: number; // To handle length updates smoothly
   currentVisualLength: number; // Smoothed length for animation
+  color?: string; // Cache color for death animation
 }
 
 interface InputCommand {
@@ -252,6 +254,12 @@ export default function GamePage() {
   const [scale, setScale] = useState<number>(1.0);
   const targetScaleRef = useRef<number>(1.0);
   const currentRenderScaleRef = useRef<number>(1.0); // For smooth rendering without state updates every frame
+  const particleSystemRef = useRef<ParticleSystem | null>(null);
+
+  // Initialize Particle System
+  useEffect(() => {
+    particleSystemRef.current = new ParticleSystem();
+  }, []);
 
   const [isConnected, setIsConnected] = useState(false);
   const [playerName, setPlayerName] = useState('');
@@ -263,6 +271,31 @@ export default function GamePage() {
    * Pass 1: Draw larger circles for the outline (creates the ribbed border)
    * Pass 2: Draw inner circles for the body
    */
+  /**
+   * Render Snake V2: The "Slither Style" Two-Pass System
+   * Pass 1: Draw larger circles for the outline (creates the ribbed border)
+   * Pass 2: Draw inner circles for the body
+   * Optimized with Viewport Culling & Call Batching
+   */
+  /**
+   * Helper: Calculate snake radius based on length (Uncapped)
+   * Base 10px -> Grows linearly/logarithmically
+   */
+  const getSnakeRadius = (length: number) => {
+    // Original: (20 + Math.min(10, length / 50)) / 2  (Capped at 15px radius / 30px width)
+    // New: Uncapped growth.
+    // Length 50 -> 10 + 1 = 11
+    // Length 500 -> 10 + 10 = 20
+    // Length 5000 -> 10 + 100 = 110 (Too big?)
+    // Let's use a slower logarithmic growth after a certain point or just a gentler linear slope.
+    // Try: Base 10 + (length / 100)
+    return 10 + (length / 100);
+  };
+
+  /**
+   * Render Snake V2: The "Slither Style" Two-Pass System
+   * Optimized with Viewport Culling & Relative Scaling
+   */
   function renderSnakeV2(ctx: CanvasRenderingContext2D, snake: Snake, isPlayer: boolean, localSnake?: LocalSnakeState, gameState?: GameState) {
     // 1. Construct High-Res Source Path
     let rawPath: Point[] = [];
@@ -271,13 +304,9 @@ export default function GamePage() {
     const drawHeadDir = isPlayer && localSnake ? localSnake.direction : snake.direction;
 
     if (isPlayer && localSnake && localSnake.path && localSnake.path.length > 0) {
-      // Use FULL LOCAL PATH for perfect smoothness
-      // localSnake.path is already [Head, ...Body, Tail]
       rawPath = localSnake.path;
     } else {
-      // Remote: [Head, ...Body] (Server path reversed)
       if (snake.path && snake.path.length > 0) {
-        // Server path is [Tail...Head]. We want [Head...Tail] for walking
         for (let i = snake.path.length - 1; i >= 0; i--) {
           rawPath.push(snake.path[i]);
         }
@@ -286,77 +315,127 @@ export default function GamePage() {
       }
     }
 
-    // Not enough points? Draw Head only
     if (rawPath.length < 2) {
-      drawSnakeHead(ctx, drawHeadPos, drawHeadDir, snake.color, isPlayer);
+      // We need radius even for head-only render
+      // Calculate radius
+      let radius = getSnakeRadius(snake.length);
+
+      // Relative Scaling for Enemies
+      if (!isPlayer && gameState && playerIdRef.current) {
+        const playerSnake = gameState.snakes.find(s => s.playerId === playerIdRef.current);
+        if (playerSnake) {
+          // Get player's visual radius (smooth)
+          // If we have local state, use that length for smoothness
+          const playerLen = localSnakeRef.current ? localSnakeRef.current.currentVisualLength : playerSnake.length;
+          const playerRadius = getSnakeRadius(playerLen);
+
+          // Cap enemy visual size relative to player
+          // Enemies can never visually appear more than 3x larger than the player
+          // This prevents a massive 100k length snake from covering the entire screen of a size 10 snake
+          const maxRelativeRadius = playerRadius * 2.5;
+          radius = Math.min(radius, maxRelativeRadius);
+        }
+      }
+
+      drawSnakeHead(ctx, drawHeadPos, drawHeadDir, snake.color, isPlayer, radius);
       return;
     }
 
-    // 2. Generate Visual Segments (The Ribbed Spacing)
-    // Radius grows slowly: Base 10px -> 20px max.
-    const baseRadius = (20 + Math.min(10, snake.length / 50)) / 2;
+    // 2. Generate Visual Segments
+    let baseRadius = getSnakeRadius(snake.length);
 
-    // KEY TUNING: Spacing = Radius * 0.8 (Less Overlap).
-    // Smaller coefficient = More dense/smooth. Larger = More separate beads.
-    // 0.8 ensures distinct circles (beads).
+    // --- RELATIVE SCALING LOGIC ---
+    if (!isPlayer && gameState && playerIdRef.current) {
+      const playerSnake = gameState.snakes.find(s => s.playerId === playerIdRef.current);
+      if (playerSnake) {
+        const playerLen = localSnakeRef.current ? localSnakeRef.current.currentVisualLength : playerSnake.length;
+        const playerRadius = getSnakeRadius(playerLen);
+        const maxRelativeRadius = playerRadius * 2.5;
+
+        baseRadius = Math.min(baseRadius, maxRelativeRadius);
+      }
+    }
+
     const segmentSpacing = baseRadius * 0.8;
-
     const visualSegments = getEquidistantPoints(rawPath, segmentSpacing);
 
     const outlineColor = adjustBrightness(snake.color, -30);
-    const outlineRadius = baseRadius + 2; // 2px Border
+    const outlineRadius = baseRadius + 2;
+
+    // Viewport Culling
+    const canvas = ctx.canvas;
+    // Add ample padding for culling to avoid popping
+    const padding = outlineRadius * 4;
+    const viewportMinX = cameraRef.current.x - canvas.width / (2 * currentRenderScaleRef.current) - padding;
+    const viewportMaxX = cameraRef.current.x + canvas.width / (2 * currentRenderScaleRef.current) + padding;
+    const viewportMinY = cameraRef.current.y - canvas.height / (2 * currentRenderScaleRef.current) - padding;
+    const viewportMaxY = cameraRef.current.y + canvas.height / (2 * currentRenderScaleRef.current) + padding;
+
+    const isVisible = (p: Point) => {
+      return p.x >= viewportMinX && p.x <= viewportMaxX &&
+        p.y >= viewportMinY && p.y <= viewportMaxY;
+    };
 
     ctx.save();
 
-    // 3. Render Pass 1: OUTLINE (Large Circles)
-    // Draw from TAIL (end of array) to NECK (index 1). Head (0) is special.
+    // 3. Render Pass 1: OUTLINE
     ctx.fillStyle = outlineColor;
     for (let i = visualSegments.length - 1; i > 0; i--) {
       const p = visualSegments[i];
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, outlineRadius, 0, Math.PI * 2);
-      ctx.fill();
+      if (isVisible(p)) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, outlineRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
-    // 4. Render Pass 2: BODY (Inner Circles)
+    // 4. Render Pass 2: BODY
     ctx.fillStyle = snake.color;
-
-    // Shadow
     ctx.shadowBlur = snake.isBoosting ? 20 : 10;
     ctx.shadowColor = snake.isBoosting ? '#ffffff' : snake.color;
 
+    const visibleBodySegments = [];
     for (let i = visualSegments.length - 1; i > 0; i--) {
       const p = visualSegments[i];
-
-      ctx.beginPath();
-      // Use slightly varying radius for organic feel? No, keep steady for clean look.
-      ctx.arc(p.x, p.y, baseRadius, 0, Math.PI * 2);
-      ctx.fill();
-
-      // OPTIONAL: Spine Texture
-      // A small lighter dot in center-ish
-      ctx.save();
-      ctx.fillStyle = 'rgba(255,255,255,0.15)';
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, baseRadius * 0.3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      if (isVisible(p)) {
+        visibleBodySegments.push(p);
+      }
     }
 
-    ctx.restore(); // End Shadow/Context
+    for (const p of visibleBodySegments) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, baseRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
-    // 5. Draw Head (Always last = Top Layer)
-    drawSnakeHead(ctx, drawHeadPos, drawHeadDir, snake.color, isPlayer);
+    // 5. Render Pass 3: SPINE TEXTURE
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
 
-    // 6. Name Tag
+    for (const p of visibleBodySegments) {
+      ctx.moveTo(p.x + baseRadius * 0.3, p.y);
+      ctx.arc(p.x, p.y, baseRadius * 0.3, 0, Math.PI * 2);
+    }
+    ctx.fill();
+
+    ctx.restore();
+
+    // 6. Draw Head
+    drawSnakeHead(ctx, drawHeadPos, drawHeadDir, snake.color, isPlayer, baseRadius);
+
+    // 7. Name Tag
     if (isPlayer || snake.length > 50) {
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 14px Arial';
-      ctx.textAlign = 'center';
-      ctx.shadowBlur = 4;
-      ctx.shadowColor = 'black';
-      // Position text above head
-      ctx.fillText(isPlayer ? 'YOU' : (snake.name || 'Enemy'), drawHeadPos.x, drawHeadPos.y - (baseRadius + 15));
+      if (isVisible(drawHeadPos)) {
+        ctx.fillStyle = '#ffffff';
+        // Scale font with snake size roughly
+        const fontSize = Math.max(14, Math.min(32, 14 + (baseRadius - 10)));
+        ctx.font = `bold ${fontSize}px Arial`;
+        ctx.textAlign = 'center';
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = 'black';
+        ctx.fillText(isPlayer ? 'YOU' : (snake.name || 'Enemy'), drawHeadPos.x, drawHeadPos.y - (baseRadius + 15));
+      }
     }
   }
 
@@ -861,10 +940,22 @@ export default function GamePage() {
         cameraRef.current.x += (targetX - cameraRef.current.x) * damping;
         cameraRef.current.y += (targetY - cameraRef.current.y) * damping;
 
-        // Dynamic Zoom Logic - GENTLER FORMULA
-        // Start zooming at length 50 instead of 20
-        // Use 0.001 factor instead of 0.005
-        const newTargetScale = Math.max(0.6, 1.0 - Math.max(0, playerSnake.length - 50) * 0.001);
+        // Dynamic Zoom Logic - GENTLER FORMULA (Uncapped)
+        // Original: Math.max(0.6, 1.0 - Math.max(0, playerSnake.length - 50) * 0.001);
+        // New: logarithmic scaling that continues indefinitely but slowly
+        // Base scale 1.0. At 1000 length -> ~0.5. At 10000 length -> ~0.2
+        const baseScale = 1.0;
+        const growFactor = Math.max(0, playerSnake.length - 50);
+
+        // Formula: 1 / (1 + length * constant)
+        // length 50 -> 1.0
+        // length 500 -> 1 / (1 + 450 * 0.001) = 1 / 1.45 = 0.69
+        // length 5000 -> 1 / (1 + 4950 * 0.001) = 1 / 5.95 = 0.16
+        // length 100000 -> 1 / 100 = 0.01
+
+        // Let's cap the min scale to something reasonable like 0.05 (20x zoom out) so we don't see the whole universe inverted.
+        const newTargetScale = Math.max(0.05, 1.0 / (1 + growFactor * 0.0008));
+
         targetScaleRef.current = newTargetScale;
       }
 
@@ -926,6 +1017,12 @@ export default function GamePage() {
             renderSnakeV2(ctx, snake, false, undefined, state);
           }
         }
+      }
+
+      // Render Particles (World Space)
+      if (particleSystemRef.current) {
+        particleSystemRef.current.update();
+        particleSystemRef.current.render(ctx); // Context is already transformed
       }
 
       // Restore context
@@ -1328,14 +1425,27 @@ export default function GamePage() {
   /**
    * Draw snake head with eyes
    */
+  /**
+   * Draw snake head with eyes
+   */
   const drawSnakeHead = (
     ctx: CanvasRenderingContext2D,
     head: Point,
     direction: number,
     color: string,
-    isPlayer: boolean
+    isPlayer: boolean,
+    radius: number = 14 // Default if not provided
   ) => {
-    const headRadius = 14;
+    // If we're scaling the head based on body size, we need to match the body radius
+    // Default was 14.
+    // If radius is passed, use it. But maybe slightly larger than body?
+    // Body uses baseRadius. Head usually baseRadius + 2 or so.
+    // Let's just use radius passed in, which is baseRadius.
+    // Actually, visually the head should be slightly wider than the body connections?
+    // In V2, we drew body with baseRadius.
+    // Let's use radius * 1.0 as base for head.
+
+    const headRadius = radius;
 
     ctx.save();
 
@@ -1478,75 +1588,6 @@ export default function GamePage() {
       ctx.fillText(`Score: ${playerSnake.score}`, canvas.width - 20, 35);
       ctx.fillText(`Length: ${Math.floor(playerSnake.length)}`, canvas.width - 20, 55);
 
-      // --- MINIMAP (Circular) ---
-      const mapRadius = 75;
-      const mapDiameter = mapRadius * 2;
-      const mapPadding = 20;
-      const mapCenterX = canvas.width - mapRadius - mapPadding;
-      const mapCenterY = canvas.height - mapRadius - mapPadding;
-
-      ctx.save();
-
-      // 1. Clip to Circle
-      ctx.beginPath();
-      ctx.arc(mapCenterX, mapCenterY, mapRadius, 0, Math.PI * 2);
-      ctx.clip();
-
-      // 2. Background
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)'; // Dark background
-      ctx.fill();
-
-      // 3. Render Food on Minimap
-      // World Size assumption (should be dynamic ideally)
-      const worldW = 5000;
-      const worldH = 5000;
-
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.5)'; // Weak dot for food
-      for (const food of state.food) {
-        const fx = (food.position.x / worldW) * mapDiameter - mapRadius;
-        const fy = (food.position.y / worldH) * mapDiameter - mapRadius;
-
-        // Only draw if within circle (simple box check first optimization)
-        if (fx * fx + fy * fy < mapRadius * mapRadius) {
-          ctx.fillRect(mapCenterX + fx, mapCenterY + fy, 2, 2);
-        }
-      }
-
-      // 4. Render Enemies on Minimap (Red Dots)
-      state.snakes.forEach(s => {
-        if (s.playerId === playerIdRef.current) return;
-        const sx = (s.head.x / worldW) * mapDiameter - mapRadius;
-        const sy = (s.head.y / worldH) * mapDiameter - mapRadius;
-
-        ctx.beginPath();
-        ctx.fillStyle = '#ff0000';
-        ctx.arc(mapCenterX + sx, mapCenterY + sy, 3, 0, Math.PI * 2);
-        ctx.fill();
-      });
-
-      // 5. Player Dot
-      if (playerSnake) {
-        const px = (playerSnake.head.x / worldW) * mapDiameter - mapRadius;
-        const py = (playerSnake.head.y / worldH) * mapDiameter - mapRadius;
-
-        // Draw Dot
-        ctx.fillStyle = '#00ff00'; // Green for player
-        ctx.shadowBlur = 5;
-        ctx.shadowColor = '#00ff00';
-        ctx.beginPath();
-        ctx.arc(mapCenterX + px, mapCenterY + py, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-      }
-
-      // Border Ring
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(mapCenterX, mapCenterY, mapRadius, 0, Math.PI * 2);
-      ctx.stroke();
-
-      ctx.restore();
     }
   };
 
@@ -1603,6 +1644,7 @@ export default function GamePage() {
 
   // State
   const [isDead, setIsDead] = useState(false);
+  const [showEntryScreen, setShowEntryScreen] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
 
   // Setup Socket Listeners Helper
@@ -1628,7 +1670,8 @@ export default function GamePage() {
             lastServerSync: Date.now(),
             path: playerSnake.path ? [...playerSnake.path].reverse() : [{ ...playerSnake.head }],
             pendingPathLength: playerSnake.length,
-            currentVisualLength: playerSnake.length
+            currentVisualLength: playerSnake.length,
+            color: playerSnake.color
           };
         } else {
           const dist = Math.hypot(
@@ -1672,6 +1715,7 @@ export default function GamePage() {
       playerIdRef.current = data.playerId;
       setIsPlaying(true);
       setIsDead(false);
+      setShowEntryScreen(false);
     });
   };
 
@@ -1692,6 +1736,13 @@ export default function GamePage() {
       if (state.tick > 0) {
         const playerSnake = state.snakes.find(s => s.playerId === playerIdRef.current);
         if (!playerSnake) {
+          // Trigger Explosion at last known location
+          if (localSnakeRef.current && particleSystemRef.current) {
+            const head = localSnakeRef.current.head;
+            // Burst of particles
+            particleSystemRef.current.emitExplosion(head.x, head.y, localSnakeRef.current.color || '#ff0000', 80);
+          }
+
           setIsDead(true);
           setIsPlaying(false);
           localSnakeRef.current = null;
@@ -1703,6 +1754,11 @@ export default function GamePage() {
             setIsConnected(false); // Briefly offline
             setTimeout(connectToLobby, 100); // Reconnect
           }
+
+          // DELAY SHOWING ENTRY SCREEN
+          setTimeout(() => {
+            setShowEntryScreen(true);
+          }, 2000);
         }
       }
     };
@@ -1721,7 +1777,7 @@ export default function GamePage() {
       />
 
       {/* Entry Screen Overlay */}
-      {(!isPlaying || isDead) && (
+      {showEntryScreen && (
         <EntryScreen
           playerName={playerName}
           setPlayerName={setPlayerName}

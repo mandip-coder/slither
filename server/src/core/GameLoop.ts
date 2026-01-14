@@ -45,7 +45,7 @@ export class GameLoop {
     // Initialize systems
     this.physicsSystem = new PhysicsSystem();
     this.collisionSystem = new CollisionSystem(this.spatialGrid);
-    this.foodSystem = new FoodSystem();
+    this.foodSystem = new FoodSystem(this.spatialGrid);
     this.scoreSystem = new ScoreSystem();
 
     this.systems = [

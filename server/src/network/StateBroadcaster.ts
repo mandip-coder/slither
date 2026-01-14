@@ -69,6 +69,7 @@ export class StateBroadcaster {
 
         const gameState = room.getGameState();
         const scoreSystem = room.getScoreSystem();
+        const spatialGrid = room.getSpatialGrid();
 
         // Get all sockets in this room
         const socketsInRoom = this.io.sockets.adapter.rooms.get(roomInfo.id);
@@ -92,6 +93,7 @@ export class StateBroadcaster {
           const fullState = this.serializeStateForPlayer(
             gameState,
             scoreSystem,
+            spatialGrid,
             playerId,
             playerSnake
           );
@@ -129,45 +131,39 @@ export class StateBroadcaster {
   private serializeStateForPlayer(
     gameState: any,
     scoreSystem: any,
+    spatialGrid: any,
     playerId: string,
     playerSnake: any
   ): GameStateUpdate {
     const viewportRadius = NETWORK_CONFIG.VIEWPORT_RADIUS;
-    const visibleSnakes = [];
-    const visibleFood = [];
+    const searchRadius = viewportRadius + NETWORK_CONFIG.VIEWPORT_BUFFER;
+
+    let visibleSnakes = [];
+    let visibleFood = [];
 
     // If player has a snake, only send nearby entities
     if (playerSnake && playerSnake.isAlive) {
       const playerPos = playerSnake.head;
 
-      // Get visible snakes
-      for (const snake of gameState.snakes.values()) {
-        if (!snake.isAlive) continue;
+      // Get visible snakes efficiently
+      const nearbySnakes = spatialGrid.getSnakesInRadius(playerPos, searchRadius, gameState.snakes);
+      visibleSnakes = nearbySnakes.map((s: any) => s.serialize());
 
-        const dist = distance(playerPos, snake.head);
-        if (dist <= viewportRadius + NETWORK_CONFIG.VIEWPORT_BUFFER) {
-          visibleSnakes.push(snake.serialize());
-        }
-      }
+      // Get visible food efficiently
+      const nearbyFood = spatialGrid.getFoodInRadius(playerPos, searchRadius, gameState.food);
+      visibleFood = nearbyFood.map((f: any) => f.serialize());
 
-      // Get visible food
-      for (const food of gameState.food.values()) {
-        if (food.isConsumed) continue;
-
-        const dist = distance(playerPos, food.position);
-        if (dist <= viewportRadius + NETWORK_CONFIG.VIEWPORT_BUFFER) {
-          visibleFood.push(food.serialize());
-        }
-      }
     } else {
       // Player is dead - send all snakes (spectator mode)
+      // Note: In a huge world, we might want to restrict this too, but for now show all snakes
+      // or show a random subset / center view
       for (const snake of gameState.snakes.values()) {
         if (snake.isAlive) {
           visibleSnakes.push(snake.serialize());
         }
       }
 
-      // Send sample of food
+      // Send sample of food for spectators (checking grid stats would be better)
       let foodCount = 0;
       for (const food of gameState.food.values()) {
         if (!food.isConsumed && foodCount < 50) {

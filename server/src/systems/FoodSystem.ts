@@ -4,8 +4,9 @@ import { Food } from '../entities/Food';
 import { Snake } from '../entities/Snake';
 import { randomPosition, randomId, randomElement, randomFloat } from '../utils/random';
 import { GAME_CONFIG } from '../config/game.config';
-import { circlesIntersect, distance } from '../utils/math';
+import { circlesIntersect, distance, distanceSquared } from '../utils/math';
 import { logger } from '../utils/logger';
+import { SpatialGrid } from './SpatialGrid';
 
 /**
  * Food system - manages food spawning, cleanup, and death-to-food conversion
@@ -14,9 +15,11 @@ export class FoodSystem implements ISystem {
   public name = 'FoodSystem';
   private targetFoodCount: number;
   private deadSnakesProcessed: Set<string> = new Set();
+  private spatialGrid: SpatialGrid;
 
-  constructor(targetFoodCount: number = GAME_CONFIG.FOOD_COUNT) {
+  constructor(spatialGrid: SpatialGrid, targetFoodCount: number = GAME_CONFIG.FOOD_COUNT) {
     this.targetFoodCount = targetFoodCount;
+    this.spatialGrid = spatialGrid;
   }
 
   update(deltaTime: number, gameState: GameState): void {
@@ -38,20 +41,25 @@ export class FoodSystem implements ISystem {
    */
   private applyMagnetEffect(gameState: GameState, deltaTime: number): void {
     const { snakes, food } = gameState;
+    const magnetRadius = GAME_CONFIG.MAGNET_RADIUS;
+    const magnetRadiusSq = magnetRadius * magnetRadius;
 
     for (const snake of snakes.values()) {
       if (!snake.isAlive) continue;
 
       const head = snake.head;
-      const magnetRadius = GAME_CONFIG.MAGNET_RADIUS;
 
-      // Check all food items (optimization: use spatial grid in future)
-      for (const foodItem of food.values()) {
+      // Query spatial grid for potential food items
+      const nearbyFood = this.spatialGrid.getFoodInRadius(head, magnetRadius, food);
+
+      for (const foodItem of nearbyFood) {
         if (foodItem.isConsumed) continue;
 
-        const dist = distance(head, foodItem.position);
+        const distSq = distanceSquared(head, foodItem.position);
 
-        if (dist < magnetRadius) {
+        if (distSq < magnetRadiusSq) {
+          const dist = Math.sqrt(distSq);
+
           // Food is inside magnet radius!
           // Exponential pull: stronger as it gets closer
           // Formula: (1 - dist/radius)^2
@@ -66,8 +74,14 @@ export class FoodSystem implements ISystem {
           const dy = head.y - foodItem.position.y;
           const angle = Math.atan2(dy, dx);
 
+          // Remove from grid at old position
+          this.spatialGrid.removeFood(foodItem.id);
+
           foodItem.position.x += Math.cos(angle) * speed * deltaTime;
           foodItem.position.y += Math.sin(angle) * speed * deltaTime;
+
+          // Re-add to grid at new position
+          this.spatialGrid.addFood(foodItem);
         }
       }
     }
@@ -119,6 +133,7 @@ export class FoodSystem implements ISystem {
         );
 
         food.set(foodId, newFood);
+        this.spatialGrid.addFood(newFood);
         foodSpawned++;
       }
 
@@ -161,6 +176,7 @@ export class FoodSystem implements ISystem {
 
     for (const [id, foodItem] of food.entries()) {
       if (foodItem.isConsumed) {
+        this.spatialGrid.removeFood(id);
         food.delete(id);
       }
     }
@@ -197,6 +213,7 @@ export class FoodSystem implements ISystem {
         );
 
         food.set(foodId, newFood);
+        this.spatialGrid.addFood(newFood);
       }
     }
   }

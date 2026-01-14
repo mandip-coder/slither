@@ -160,29 +160,54 @@ export class ConnectionManager {
   /**
    * Find a safe spawn position far from other snakes
    */
+  /**
+   * Find a safe spawn position far from other snakes
+   */
   private findSafeSpawnPosition(gameState: any): { x: number, y: number } {
-    const maxAttempts = 20;
-    const safeRadius = 150; // Buffer distance
+    const worldRadius = gameState.worldSize.width / 2;
+    // Keep spawn within inner 80% to avoid immediate border death
+    const spawnMargin = worldRadius * 0.2 + 100;
+
+    // Attempt 1: Strict Check (High safety radius)
+    let pos = this.tryFindSpot(gameState, spawnMargin, 300, 30);
+    if (pos) return pos;
+
+    // Attempt 2: Relaxed Check (Medium safety radius)
+    pos = this.tryFindSpot(gameState, spawnMargin, 150, 20);
+    if (pos) return pos;
+
+    // Attempt 3: Desperate Check (Low safety radius, wider area)
+    pos = this.tryFindSpot(gameState, 100, 80, 20); // allow closer to border if needed
+    if (pos) return pos;
+
+    // Fallback: Random (just avoid absolute edge)
+    return randomPosition(gameState.worldSize, 200);
+  }
+
+  /**
+   * Helper to find a spot with specific constraints
+   */
+  private tryFindSpot(gameState: any, margin: number, safeRadius: number, attempts: number): { x: number, y: number } | null {
     const safeRadiusSq = safeRadius * safeRadius;
 
-    for (let i = 0; i < maxAttempts; i++) {
-      const pos = randomPosition(gameState.worldSize, 200);
+    for (let i = 0; i < attempts; i++) {
+      const pos = randomPosition(gameState.worldSize, margin);
       let safe = true;
 
       // Check distance to all other snakes
       for (const snake of gameState.snakes.values()) {
         if (!snake.isAlive) continue;
 
-        // Check head
+        // Check head (most dangerous)
         const distSq = (snake.head.x - pos.x) ** 2 + (snake.head.y - pos.y) ** 2;
-        if (distSq < safeRadiusSq) {
+        if (distSq < safeRadiusSq * 2) { // Double safety distance for heads
           safe = false;
           break;
         }
 
-        // Check path (approximate with every 10th point for performance)
+        // Check path (approximate with every 5th point for performance)
         if (snake.path) {
-          for (let j = 0; j < snake.path.length; j += 10) {
+          for (let j = 0; j < snake.path.length; j += 5) {
             const point = snake.path[j];
             const pDistSq = (point.x - pos.x) ** 2 + (point.y - pos.y) ** 2;
             if (pDistSq < safeRadiusSq) {
@@ -196,9 +221,7 @@ export class ConnectionManager {
 
       if (safe) return pos;
     }
-
-    // Fallback if crowded
-    return randomPosition(gameState.worldSize, 200);
+    return null;
   }
 
 

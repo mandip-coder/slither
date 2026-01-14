@@ -88,15 +88,19 @@ export class CollisionSystem implements ISystem {
 
       const head = snake.getHead();
 
-      for (const foodItem of food.values()) {
+      // Optimization: Only check food in the snake's vicinity using SpatialGrid
+      // Use a grab radius + max food size to be safe
+      const searchRadius = head.radius + GAME_CONFIG.FOOD_MAX_SIZE * 2;
+      const nearbyFood = this.spatialGrid.getFoodInRadius(head, searchRadius, food);
+
+      for (const foodItem of nearbyFood) {
         if (foodItem.isConsumed) continue;
 
         // Check head collision with forgiving radius
-        const grabRadius = head.radius + foodItem.radius * 1.0; // Tighter radius (was * 2.0)
+        const grabRadius = head.radius + foodItem.radius * 1.0;
         let eaten = pointInCircle(foodItem.position, head, grabRadius);
 
         // Anti-tunneling: Check collision with the last path segment as well
-        // This covers the gap if the snake jumped past the food in a single tick
         if (!eaten) {
           const prevPoint = snake.getLastPathPoint();
           if (prevPoint) {
@@ -113,6 +117,9 @@ export class CollisionSystem implements ISystem {
           foodItem.consume();
           snake.grow(foodItem.value);
 
+          // IMPORTANT: Remove from spatial grid immediately so other snakes don't eat it in same tick
+          this.spatialGrid.removeFood(foodItem.id);
+
           this.collisionEvents.push({
             type: 'snake-food',
             snakeId: snake.id,
@@ -124,7 +131,6 @@ export class CollisionSystem implements ISystem {
           // Update player score
           const player = gameState.players.get(snake.playerId);
           if (player) {
-            // Score based on food size/value
             player.addScore(foodItem.value * GAME_CONFIG.POINTS_PER_FOOD);
           }
         }
